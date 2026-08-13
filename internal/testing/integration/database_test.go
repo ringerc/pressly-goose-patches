@@ -97,7 +97,7 @@ func TestClickhouseReplicated(t *testing.T) {
 	require.NoError(t, db.Ping())
 	require.NoError(t, ch2.Ping())
 
-	testDatabase(t, database.DialectClickHouseReplicated, db, "testdata/migrations/clickhouse-replicated")
+	testDatabase(t, database.DialectClickHouseReplicated, db, "testdata/migrations/clickhouse-replicated", goose.WithIsolateDDL(true))
 
 	// After testDatabase() completes, all up-migrations have been re-applied
 	// (UpByOne loop at the end). Verify that the seeded rows and the

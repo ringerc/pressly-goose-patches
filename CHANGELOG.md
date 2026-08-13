@@ -13,6 +13,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - Mirrors the Postgres table locker introduced in #993 but uses MySQL syntax (no `RETURNING`,
     `INSERT IGNORE` + guarded `UPDATE`, `information_schema.tables` for existence checks)
   - Shares the same `TableLockerOption` set as the Postgres table locker
+- New `TestClickhouseReplicated` integration test for the `clickhouse-replicated` dialect.
+  Brings up a two-node replicated ClickHouse cluster (`ch1`, `ch2`) with an embedded Keeper
+  on `ch1` via [`ory/dockertest`] on a private user network — matching the pattern of every
+  other `testdb.NewX` integration helper — runs the standard up/down/up migration cycle
+  against `ch1`, then verifies both the seeded rows and the `goose_db_version` bookkeeping
+  replicate to `ch2`. Runs under the existing `test-integration` CI job; no new job, no
+  `docker compose` dependency. Cluster XML fragments live under
+  `internal/testing/integration/clickhouse-replicated/config/`.
+
+[`ory/dockertest`]: https://github.com/ory/dockertest
 
 ### Changed
 

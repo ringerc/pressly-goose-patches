@@ -84,6 +84,53 @@ func TestClickhouse(t *testing.T) {
 	}
 }
 
+func TestClickhouseReplicated(t *testing.T) {
+	// Not t.Parallel(): the helper picks ephemeral host ports so multiple
+	// runs *could* coexist, but the cluster startup is heavyweight (~10s),
+	// so keeping this serial matches how the other integration tests behave.
+	const cluster = "goose_cluster"
+	t.Setenv(database.EnvClickhouseCluster, cluster)
+
+	db, ch2, cleanup, err := testdb.NewClickHouseReplicated()
+	require.NoError(t, err)
+	t.Cleanup(cleanup)
+	require.NoError(t, db.Ping())
+	require.NoError(t, ch2.Ping())
+
+	testDatabase(t, database.DialectClickHouseReplicated, db, "testdata/migrations/clickhouse-replicated")
+
+	// After testDatabase() completes, all up-migrations have been re-applied
+	// (UpByOne loop at the end). Verify that the seeded rows and the
+	// goose_db_version bookkeeping are visible on BOTH replicas. Replication
+	// itself is a property of ClickHouse's Replicated* engines, not of the
+	// dialect; what this checks is that the dialect drives them correctly
+	// (ON CLUSTER DDL on both nodes, replicated version table, replicated
+	// user tables via the migrations under testdata/) so the version state
+	// actually converges on ch2.
+	//
+	// Replication is asynchronous by default; select_sequential_consistency
+	// wouldn't help here because we're bypassing the dialect's Querier for a
+	// raw SELECT.
+	require.Eventually(t, func() bool {
+		var got int
+		if err := ch2.QueryRow(`SELECT count() FROM events`).Scan(&got); err != nil {
+			return false
+		}
+		return got == 3
+	}, 30*time.Second, 500*time.Millisecond, "expected 3 rows to replicate to ch2")
+
+	require.Eventually(t, func() bool {
+		var got int
+		if err := ch2.QueryRow(`SELECT count() FROM (
+			SELECT version_id, argMax(is_applied, tstamp) AS is_applied
+			FROM goose_db_version GROUP BY version_id
+		) WHERE version_id > 0 AND is_applied = 1`).Scan(&got); err != nil {
+			return false
+		}
+		return got == 3
+	}, 30*time.Second, 500*time.Millisecond, "expected 3 applied versions to replicate to ch2")
+}
+
 func TestClickhouseRemote(t *testing.T) {
 	t.Parallel()
 

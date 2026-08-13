@@ -101,8 +101,41 @@ func NewClickHouseReplicated(opts ...OptionsFunc) (ch1DB, ch2DB *sql.DB, cleanup
 		return nil, nil, nil, fmt.Errorf("connect to ch2 (%s): %w", ch2Addr, err)
 	}
 
+	// Ping only proves the CH TCP socket is up. `ON CLUSTER` DDL additionally
+	// needs Keeper reachable and both replicas registered against the cluster
+	// definition. Gate on that here so goose's `CREATE TABLE ... ON CLUSTER`
+	// during Provider.Init doesn't race with cluster bootstrap.
+	if err := pool.Retry(func() error {
+		return clickHouseReplicatedClusterReady(ch1DB)
+	}); err != nil {
+		return nil, nil, nil, fmt.Errorf("cluster %q not ready: %w", CLICKHOUSE_REPLICATED_CLUSTER, err)
+	}
+
 	success = true
 	return ch1DB, ch2DB, cleanup, nil
+}
+
+// clickHouseReplicatedClusterReady returns nil once ch1 can see both replicas
+// of goose_cluster and its Keeper root znode is reachable. That is a
+// necessary (and effectively sufficient) precondition for `ON CLUSTER` DDL to
+// succeed without racing.
+func clickHouseReplicatedClusterReady(db *sql.DB) error {
+	var hosts int
+	if err := db.QueryRow(
+		`SELECT count() FROM system.clusters WHERE cluster = ?`,
+		CLICKHOUSE_REPLICATED_CLUSTER,
+	).Scan(&hosts); err != nil {
+		return fmt.Errorf("query system.clusters: %w", err)
+	}
+	if hosts < 2 {
+		return fmt.Errorf("cluster %q has %d hosts, want 2", CLICKHOUSE_REPLICATED_CLUSTER, hosts)
+	}
+	// Probe Keeper by reading the root znode; fails cleanly until keeper is up.
+	var zk int
+	if err := db.QueryRow(`SELECT count() FROM system.zookeeper WHERE path = '/'`).Scan(&zk); err != nil {
+		return fmt.Errorf("query system.zookeeper: %w", err)
+	}
+	return nil
 }
 
 func runClickHouseReplicatedNode(
